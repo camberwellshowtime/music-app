@@ -7,6 +7,7 @@ import path from 'path'
 const outdir = path.join(process.cwd(), 'dist')
 const vocalsDir = 'vocals-128'
 const noVocalsDir = 'no-vocals-128'
+const isolatedDir = 'vocals-isolated-128'
 
 // Clean dist/
 if (existsSync(outdir)) {
@@ -51,7 +52,9 @@ if (!swResult.success) {
 // Copy pre-converted 128kbps MP3s and lyrics to dist/
 await mkdir(`${outdir}/vocals`, { recursive: true })
 await mkdir(`${outdir}/no-vocals`, { recursive: true })
+await mkdir(`${outdir}/vocals-isolated`, { recursive: true })
 await mkdir(`${outdir}/lyrics`, { recursive: true })
+await mkdir(`${outdir}/melody`, { recursive: true })
 
 async function copyGlob(pattern, inputDir, outputDir) {
   const tasks = []
@@ -65,7 +68,9 @@ console.log('\nCopying audio, lyrics and PWA assets…')
 await Promise.all([
   copyGlob('*.mp3', vocalsDir, `${outdir}/vocals`),
   copyGlob('*.mp3', noVocalsDir, `${outdir}/no-vocals`),
+  copyGlob('*.mp3', isolatedDir, `${outdir}/vocals-isolated`),
   copyGlob('*.html', 'src/lyrics', `${outdir}/lyrics`),
+  copyGlob('*.json', 'src/data/melody', `${outdir}/melody`),
   Bun.write(`${outdir}/manifest.json`, Bun.file('src/manifest.json')),
   Bun.write(`${outdir}/icon-180.png`, Bun.file('src/icon-180.png')),
   Bun.write(`${outdir}/icon-192.png`, Bun.file('src/icon-192.png')),
