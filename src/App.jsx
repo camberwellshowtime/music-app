@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
-import { songs, songById, vocalsUrl, noVocalsUrl, lyricsUrl } from './songs'
+import { songs, songById, vocalsUrl, noVocalsUrl, isolatedUrl, lyricsUrl, melodyUrl } from './songs'
+import SingAlong from './SingAlong'
 import { addBookmark, deleteBookmark, updateBookmark } from './db'
 import { useBookmarks, useDownloads } from './hooks'
 
@@ -38,6 +39,7 @@ export default function App() {
   const [showLyrics, setShowLyrics] = useState(_saved?.showLyrics ?? false)
   const [lyricsHtml, setLyricsHtml] = useState(null)
   const [lyricsLoading, setLyricsLoading] = useState(false)
+  const [singMode, setSingMode] = useState(false)
   const [editingBookmark, setEditingBookmark] = useState(null)
   const [editLabel, setEditLabel] = useState('')
   const [editTime, setEditTime] = useState(0)
@@ -45,6 +47,7 @@ export default function App() {
   const pendingDeleteRef = useRef(null)
   const vocalsRef = useRef(null)
   const noVocalsRef = useRef(null)
+  const isolatedRef = useRef(null)
   // Initialise with saved seek position so the [currentId] effect picks it up on first mount
   const pendingSeek = useRef(
     _saved?.currentId && _saved?.currentTime > 0
@@ -128,26 +131,32 @@ export default function App() {
     return () => window.removeEventListener('popstate', handler)
   }, [])
 
-  // Load both audio elements when song changes
+  // Load all audio elements when song changes
   useEffect(() => {
     const va = vocalsRef.current
     const nv = noVocalsRef.current
+    const is = isolatedRef.current
     if (!va || !nv || !currentSong) return
     const pending = pendingSeek.current
     pendingSeek.current = null
-    va.pause()
-    nv.pause()
+    va.pause(); nv.pause(); is?.pause()
     va.src = vocalsUrl(currentSong)
     nv.src = noVocalsUrl(currentSong) ?? vocalsUrl(currentSong)
-    va.load()
-    nv.load()
+    if (is) {
+      const isoUrl = isolatedUrl(currentSong)
+      if (isoUrl) { is.src = isoUrl; is.load() }
+      else is.src = ''
+    }
+    va.load(); nv.load()
     if (pending) {
       va.addEventListener('canplay', () => {
         va.currentTime = pending.time
         nv.currentTime = pending.time
+        if (is && is.src) is.currentTime = pending.time
         if (pending.play) {
           va.play().catch(() => {})
           nv.play().catch(() => {})
+          if (is && is.src) is.play().catch(() => {})
         }
       }, { once: true })
     }
@@ -157,9 +166,11 @@ export default function App() {
   useEffect(() => {
     const va = vocalsRef.current
     const nv = noVocalsRef.current
+    const is = isolatedRef.current
     if (!va || !nv) return
-    va.volume = mode === 'vocals' ? 1 : 0
-    nv.volume = mode === 'vocals' ? 0 : 1
+    va.volume = mode === 'vocals'   ? 1 : 0
+    nv.volume = mode === 'no-vocals' ? 1 : 0
+    if (is) is.volume = mode === 'vocals-only' ? 1 : 0
   }, [mode])
 
   // Audio events — drive state from vocals element (master)
@@ -184,6 +195,7 @@ export default function App() {
     }
     const onEnded = () => {
       nv.pause()
+      isolatedRef.current?.pause()
       if (pendingSwReload.current) { doReloadRef.current(); return }
       setCurrentId(prev => {
         const idx = songs.findIndex(s => s.id === prev)
@@ -211,15 +223,15 @@ export default function App() {
     }
   }, [])
 
-  // Periodic drift correction — keep no-vocals locked to vocals
+  // Periodic drift correction — keep no-vocals and isolated locked to vocals
   useEffect(() => {
     const interval = setInterval(() => {
       const va = vocalsRef.current
       const nv = noVocalsRef.current
-      if (!va || !nv || va.paused) return
-      if (Math.abs(va.currentTime - nv.currentTime) > 0.05) {
-        nv.currentTime = va.currentTime
-      }
+      const is = isolatedRef.current
+      if (!va || va.paused) return
+      if (nv && Math.abs(va.currentTime - nv.currentTime) > 0.05) nv.currentTime = va.currentTime
+      if (is?.src && Math.abs(va.currentTime - is.currentTime) > 0.05) is.currentTime = va.currentTime
     }, 5000)
     return () => clearInterval(interval)
   }, [])
@@ -230,6 +242,9 @@ export default function App() {
     setLoopStart(null)
     setLoopEnd(null)
     setLoopActive(false)
+    // If the new song has no isolated track, fall back to vocals
+    const song = songById(currentId)
+    if (song && !song.isolatedFile) setMode(m => m === 'vocals-only' ? 'vocals' : m)
     return () => {
       if (pendingDeleteRef.current) {
         clearTimeout(pendingDeleteRef.current.timer)
@@ -255,19 +270,23 @@ export default function App() {
   const togglePlay = () => {
     const va = vocalsRef.current
     const nv = noVocalsRef.current
+    const is = isolatedRef.current
     if (!va || !currentSong) return
     if (va.paused) {
       va.play().catch(() => {})
       nv?.play().catch(() => {})
+      if (is?.src) is.play().catch(() => {})
     } else {
       va.pause()
       nv?.pause()
+      is?.pause()
     }
   }
 
   const seek = (time) => {
     if (vocalsRef.current) vocalsRef.current.currentTime = time
     if (noVocalsRef.current) noVocalsRef.current.currentTime = time
+    if (isolatedRef.current?.src) isolatedRef.current.currentTime = time
   }
 
   const switchMode = (newMode) => {
@@ -415,6 +434,7 @@ export default function App() {
     <div className='min-h-screen bg-gray-950 text-gray-100 flex flex-col'>
       <audio ref={vocalsRef} preload='metadata' />
       <audio ref={noVocalsRef} preload='metadata' />
+      <audio ref={isolatedRef} preload='metadata' />
 
       {bookmarkMenu && (
         <div className='fixed inset-0 z-50 flex flex-col justify-end' onClick={closeBookmarkMenu}>
@@ -543,7 +563,17 @@ export default function App() {
       </main>
 
       {currentSong && (
-        <div className='fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 px-4 pt-3 pb-5 space-y-2.5 shadow-2xl'>
+        <div className='fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-700 shadow-2xl'>
+          {singMode && (
+            <SingAlong
+              song={currentSong}
+              currentTime={currentTime}
+              isPlaying={isPlaying}
+              melodyUrl={melodyUrl(currentSong)}
+              onClose={() => setSingMode(false)}
+            />
+          )}
+        <div className='px-4 pt-3 pb-5 space-y-2.5'>
           <div className='flex items-start justify-between gap-3'>
             <div className='min-w-0'>
               <div className='text-xs text-gray-500 tabular-nums'>{currentSong.id}</div>
@@ -555,6 +585,12 @@ export default function App() {
                 className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${showLyrics ? 'border-blue-500 text-blue-400' : 'border-gray-600 text-gray-500 hover:text-white hover:border-gray-400'}`}
               >
                 Lyrics
+              </button>
+              <button
+                onClick={() => setSingMode(v => !v)}
+                className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${singMode ? 'border-amber-500 text-amber-400' : 'border-gray-600 text-gray-500 hover:text-white hover:border-gray-400'}`}
+              >
+                Sing
               </button>
               <div className='flex rounded-lg overflow-hidden border border-gray-600 text-xs'>
                 <button
@@ -569,6 +605,14 @@ export default function App() {
                 >
                   No vocals
                 </button>
+                {currentSong?.isolatedFile && (
+                  <button
+                    onClick={() => switchMode('vocals-only')}
+                    className={`px-3 py-1.5 transition-colors ${mode === 'vocals-only' ? 'bg-white text-gray-900 font-semibold' : 'text-gray-400 hover:text-white'}`}
+                  >
+                    Vocals only
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -642,6 +686,7 @@ export default function App() {
               )}
             </div>
           </div>
+        </div>
         </div>
       )}
     </div>
