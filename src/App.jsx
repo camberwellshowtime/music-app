@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { songs, songById, vocalsUrl, noVocalsUrl, isolatedUrl, lyricsUrl, melodyUrl } from './songs'
 import SingAlong from './SingAlong'
-import { addBookmark, deleteBookmark, updateBookmark } from './db'
+import { addBookmark, deleteBookmark, updateBookmark, pullOnce } from './db'
 import { useBookmarks, useDownloads } from './hooks'
 
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || !!navigator.standalone
@@ -91,7 +91,7 @@ export default function App() {
     const handler = (e) => {
       if (e.data?.type === 'sw-activated') {
         refresh()
-        if (!_hadController) return // first install — no need to reload
+        if (!_hadController) { pullOnce().catch(() => {}); return } // first install — pull bookmarks, no reload
         if (vocalsRef.current && !vocalsRef.current.paused) {
           pendingSwReload.current = true // defer until music stops
         } else {
@@ -104,6 +104,12 @@ export default function App() {
   }, [refresh])
 
   useEffect(() => { if (isStandalone) downloadAll() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const handler = () => pullOnce().catch(() => {})
+    window.addEventListener('appinstalled', handler)
+    return () => window.removeEventListener('appinstalled', handler)
+  }, [])
 
   // If lyrics were restored as open, push a history entry so back button still works
   useEffect(() => {

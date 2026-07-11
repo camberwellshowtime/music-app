@@ -18,6 +18,15 @@ export function stopSync() {
   syncHandler = null
 }
 
+export async function pullOnce() {
+  const url = `${DB_REMOTE_URL}${DB_NAME}`
+  return new Promise((resolve, reject) => {
+    db.replicate.from(url)
+      .on('complete', resolve)
+      .on('error', reject)
+  })
+}
+
 export async function addBookmark(songId, time, label) {
   await db.post({ type: 'bookmark', songId, time, label })
 }
