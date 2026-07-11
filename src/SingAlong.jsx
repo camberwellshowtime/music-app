@@ -1,41 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 
-// ── Pitch detection (McLeod/YIN autocorrelation) ─────────────────────────────
-
-function detectPitch(buf, sampleRate) {
-  const n = buf.length
-  const minPeriod = Math.floor(sampleRate / 900)
-  const maxPeriod = Math.floor(sampleRate / 60)
-
-  const nsdf = new Float32Array(maxPeriod)
-  for (let tau = minPeriod; tau < maxPeriod; tau++) {
-    let acf = 0, norm = 0
-    for (let i = 0; i < n - tau; i++) {
-      acf += buf[i] * buf[i + tau]
-      norm += buf[i] * buf[i] + buf[i + tau] * buf[i + tau]
-    }
-    nsdf[tau] = norm > 0 ? 2 * acf / norm : 0
-  }
-
-  const THRESHOLD = 0.8
-  let bestTau = -1, bestVal = THRESHOLD, inPeak = false
-  for (let tau = minPeriod; tau < maxPeriod; tau++) {
-    if (!inPeak && nsdf[tau] > THRESHOLD) inPeak = true
-    if (inPeak) {
-      if (nsdf[tau] > bestVal) { bestVal = nsdf[tau]; bestTau = tau }
-      if (nsdf[tau] < 0) { inPeak = false; break }
-    }
-  }
-  if (bestTau < 0) return null
-
-  const y0 = nsdf[Math.max(minPeriod, bestTau - 1)]
-  const y1 = nsdf[bestTau]
-  const y2 = nsdf[Math.min(maxPeriod - 1, bestTau + 1)]
-  const denom = 2 * (2 * y1 - y0 - y2)
-  return sampleRate / (denom !== 0 ? bestTau + (y0 - y2) / denom : bestTau)
-}
-
 // ── Conversions ───────────────────────────────────────────────────────────────
 
 function hzToMidi(hz) {
@@ -53,43 +18,6 @@ function fmt(s) {
   if (!isFinite(s)) return '0:00'
   const m = Math.floor(s / 60)
   return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`
-}
-
-// ── Note segmentation ─────────────────────────────────────────────────────────
-
-const MAX_JUMP_ST = 1.5
-const MAX_GAP_S  = 0.05
-const MIN_DUR_S  = 0.06
-
-function segmentMelody(frames) {
-  const notes = []
-  let seg = null
-
-  const flush = () => {
-    if (!seg) return
-    if (seg.tEnd - seg.tStart >= MIN_DUR_S) {
-      const sorted = [...seg.hzValues].sort((a, b) => a - b)
-      notes.push({ t: seg.tStart, end: seg.tEnd, hz: sorted[sorted.length >> 1] })
-    }
-    seg = null
-  }
-
-  for (let i = 0; i < frames.length; i++) {
-    const d = frames[i]
-    if (!d.hz) {
-      if (seg) {
-        const nextVoiced = frames.slice(i + 1, i + Math.ceil(MAX_GAP_S / 0.01) + 2).find(f => f.hz)
-        if (!nextVoiced) flush()
-      }
-      continue
-    }
-    if (!seg) { seg = { hzValues: [d.hz], tStart: d.t, tEnd: d.t }; continue }
-    const jump = Math.abs(12 * Math.log2(d.hz / seg.hzValues[seg.hzValues.length - 1]))
-    if (jump > MAX_JUMP_ST) { flush(); seg = { hzValues: [d.hz], tStart: d.t, tEnd: d.t } }
-    else { seg.hzValues.push(d.hz); seg.tEnd = d.t }
-  }
-  flush()
-  return notes
 }
 
 // ── Canvas piano-roll ─────────────────────────────────────────────────────────
@@ -131,8 +59,19 @@ function drawPianoRoll(ctx, width, height, notes, livePitches, currentTime, octa
   if (notes && notes.length > 0) {
     const t0 = currentTime - WINDOW_SECS * 0.35
     const t1 = currentTime + WINDOW_SECS * 0.65
-    for (const note of notes) {
-      if (note.end < t0 || note.t > t1) continue
+    // Binary search: find first note whose start is at or after t0
+    let lo = 0, hi = notes.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (notes[mid].t < t0) lo = mid + 1
+      else hi = mid
+    }
+    // Step back one in case a note started before t0 but is still playing
+    const startIdx = Math.max(0, lo - 1)
+    for (let i = startIdx; i < notes.length; i++) {
+      const note = notes[i]
+      if (note.t > t1) break
+      if (note.end < t0) continue
       const midi = hzToMidi(note.hz)
       if (!midi) continue
       const bx = Math.max(0, secToX(note.t))
@@ -200,12 +139,29 @@ export default function SingAlong({
   const totalFramesRef   = useRef(0)
   const octaveVotesRef   = useRef([])
   const octaveLockedRef  = useRef(false)
+  // Pitch detection worker
+  const workerRef        = useRef(null)
+  const workerBusyRef    = useRef(false)
+  const livePitchRef     = useRef(null)   // { hz, ts } set by worker
+  // Refs that mirror props/state so the rAF loop never needs to re-register
+  const currentTimeRef   = useRef(currentTime)
+  const isPlayingRef     = useRef(isPlaying)
+  const notesRef         = useRef(null)
+  const octaveShiftRef   = useRef(0)
+  const isLandscapeRef   = useRef(false)
 
   const [notes,       setNotes]       = useState(null)
   const [micState,    setMicState]    = useState('idle')
   const [accuracy,    setAccuracy]    = useState(null)
   const [octaveShift, setOctaveShift] = useState(0)
   const [isLandscape, setIsLandscape] = useState(checkLandscape)
+
+  // Keep refs in sync with props / state
+  useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
+  useEffect(() => { isPlayingRef.current   = isPlaying   }, [isPlaying])
+  useEffect(() => { notesRef.current       = notes       }, [notes])
+  useEffect(() => { octaveShiftRef.current = octaveShift }, [octaveShift])
+  useEffect(() => { isLandscapeRef.current = isLandscape }, [isLandscape])
 
   useEffect(() => {
     const update = () => setIsLandscape(checkLandscape())
@@ -227,7 +183,7 @@ export default function SingAlong({
     if (!melodyUrl) return
     fetch(melodyUrl)
       .then(r => r.ok ? r.json() : null)
-      .then(frames => setNotes(frames ? segmentMelody(frames) : null))
+      .then(notes => setNotes(notes))
       .catch(() => setNotes(null))
   }, [melodyUrl])
 
@@ -245,6 +201,14 @@ export default function SingAlong({
       audioCtxRef.current = ctx
       analyserRef.current = analyser
       bufferRef.current   = new Float32Array(analyser.fftSize)
+
+      const worker = new Worker(new URL('./pitch-worker.js', import.meta.url), { type: 'module' })
+      worker.onmessage = ({ data }) => {
+        livePitchRef.current  = data   // { hz, ts }
+        workerBusyRef.current = false
+      }
+      workerRef.current = worker
+
       setMicState('active')
     } catch {
       setMicState('denied')
@@ -254,44 +218,61 @@ export default function SingAlong({
   const stopMic = useCallback(() => {
     streamRef.current?.getTracks().forEach(t => t.stop())
     audioCtxRef.current?.close()
+    workerRef.current?.terminate()
     streamRef.current = audioCtxRef.current = analyserRef.current = bufferRef.current = null
+    workerRef.current = null
+    workerBusyRef.current = false
+    livePitchRef.current  = null
     setMicState('idle')
   }, [])
 
   useEffect(() => () => { stopMic(); cancelAnimationFrame(animRef.current) }, [stopMic])
 
-  const refHzAt = useCallback((t) => {
-    if (!notes || notes.length === 0) return null
-    let lo = 0, hi = notes.length - 1
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1
-      if (notes[mid].t <= t) lo = mid; else hi = mid - 1
-    }
-    const n = notes[lo]
-    return (n && t >= n.t && t <= n.end) ? n.hz : null
-  }, [notes])
-
-  const octaveShiftRef = useRef(octaveShift)
-  useEffect(() => { octaveShiftRef.current = octaveShift }, [octaveShift])
-
+  // Single long-lived rAF loop — no dependency churn.
+  // All live values are read via refs so this effect runs exactly once.
   useEffect(() => {
+    const refHzAt = (t) => {
+      const notes = notesRef.current
+      if (!notes || notes.length === 0) return null
+      let lo = 0, hi = notes.length - 1
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1
+        if (notes[mid].t <= t) lo = mid; else hi = mid - 1
+      }
+      const n = notes[lo]
+      return (n && t >= n.t && t <= n.end) ? n.hz : null
+    }
+
     const frame = () => {
       animRef.current = requestAnimationFrame(frame)
 
-      let livePitch = null
-      if (analyserRef.current && bufferRef.current) {
+      const now = currentTimeRef.current
+
+      // Dispatch audio to worker when idle — non-blocking
+      if (analyserRef.current && bufferRef.current && workerRef.current && !workerBusyRef.current) {
         analyserRef.current.getFloatTimeDomainData(bufferRef.current)
         let rms = 0
         for (const v of bufferRef.current) rms += v * v
-        if (Math.sqrt(rms / bufferRef.current.length) > 0.01)
-          livePitch = detectPitch(bufferRef.current, audioCtxRef.current.sampleRate)
+        if (Math.sqrt(rms / bufferRef.current.length) > 0.01) {
+          workerBusyRef.current = true
+          workerRef.current.postMessage({ buf: bufferRef.current, sampleRate: audioCtxRef.current.sampleRate })
+        } else {
+          livePitchRef.current = null   // silence — expire last pitch immediately
+        }
       }
 
-      const now = currentTime
-      if (livePitch) livePitchesRef.current.push({ t: now, hz: livePitch })
-      livePitchesRef.current = livePitchesRef.current.filter(p => now - p.t < 3)
+      // Only use pitch if it was detected within the last 150 ms
+      const pitchResult = livePitchRef.current
+      const livePitch = (pitchResult && Date.now() - pitchResult.ts < 150) ? pitchResult.hz : null
 
-      if (isPlaying) {
+      if (livePitch) livePitchesRef.current.push({ t: now, hz: livePitch })
+      // Trim expired entries from the front in-place — no array allocation
+      const pitches = livePitchesRef.current
+      let cutIdx = 0
+      while (cutIdx < pitches.length && now - pitches[cutIdx].t >= 3) cutIdx++
+      if (cutIdx > 0) pitches.splice(0, cutIdx)
+
+      if (isPlayingRef.current) {
         const refHz = refHzAt(now)
         if (refHz && livePitch) {
           if (!octaveLockedRef.current) {
@@ -316,19 +297,20 @@ export default function SingAlong({
         }
       }
 
-      for (const ref of [canvasRef, canvasLsRef]) {
-        const canvas = ref.current
-        if (!canvas) continue
+      // Draw only the currently visible canvas
+      const canvas = isLandscapeRef.current ? canvasLsRef.current : canvasRef.current
+      if (canvas) {
         const w = canvas.offsetWidth, h = canvas.offsetHeight
-        if (w === 0 || h === 0) continue
-        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h }
-        drawPianoRoll(canvas.getContext('2d'), w, h, notes, livePitchesRef.current, now, octaveShiftRef.current)
+        if (w > 0 && h > 0) {
+          if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h }
+          drawPianoRoll(canvas.getContext('2d'), w, h, notesRef.current, pitches, now, octaveShiftRef.current)
+        }
       }
     }
 
     animRef.current = requestAnimationFrame(frame)
     return () => cancelAnimationFrame(animRef.current)
-  }, [notes, currentTime, isPlaying, refHzAt])
+  }, [])   // intentionally empty — all values read via refs
 
   const hasMelody = !!notes
   const micActive = micState === 'active'
