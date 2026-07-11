@@ -234,12 +234,14 @@ export default function SingAlong({
   const notesRef         = useRef(null)
   const octaveShiftRef   = useRef(0)
   const isLandscapeRef   = useRef(false)
+  const speakerModeRef   = useRef(false)
 
   const [notes,       setNotes]       = useState(null)
   const [micState,    setMicState]    = useState('idle')
   const [accuracy,    setAccuracy]    = useState(null)
   const [octaveShift, setOctaveShift] = useState(0)
   const [isLandscape, setIsLandscape] = useState(checkLandscape)
+  const [speakerMode, setSpeakerMode] = useState(false)
 
   // Keep refs in sync with props / state
   useEffect(() => { currentTimeRef.current = currentTime }, [currentTime])
@@ -247,6 +249,7 @@ export default function SingAlong({
   useEffect(() => { notesRef.current       = notes       }, [notes])
   useEffect(() => { octaveShiftRef.current = octaveShift }, [octaveShift])
   useEffect(() => { isLandscapeRef.current = isLandscape }, [isLandscape])
+  useEffect(() => { speakerModeRef.current = speakerMode }, [speakerMode])
 
   useEffect(() => {
     const update = () => setIsLandscape(checkLandscape())
@@ -275,7 +278,11 @@ export default function SingAlong({
   const startMic = useCallback(async () => {
     setMicState('requesting')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      const ec = speakerModeRef.current
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: ec, noiseSuppression: ec, autoGainControl: ec },
+        video: false,
+      })
       const ctx    = new AudioContext()
       const source = ctx.createMediaStreamSource(stream)
       const analyser = ctx.createAnalyser()
@@ -420,9 +427,18 @@ export default function SingAlong({
   const micButton = (
     <>
       {hasMelody && micState === 'idle' && (
-        <button onClick={startMic} className='text-xs px-3 py-1.5 rounded-full bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-colors'>
-          Use mic
-        </button>
+        <div className='flex items-center gap-1.5'>
+          <button
+            onClick={() => setSpeakerMode(v => !v)}
+            className={`text-xs px-2 py-1 rounded transition-colors ${speakerMode ? 'text-blue-400 bg-blue-900/30' : 'text-gray-600 hover:text-gray-400'}`}
+            title='Turn on if music is playing through speakers (enables echo cancellation)'
+          >
+            Speakers
+          </button>
+          <button onClick={startMic} className='text-xs px-3 py-1.5 rounded-full bg-gray-700 hover:bg-gray-600 text-gray-300 hover:text-white transition-colors'>
+            Use mic
+          </button>
+        </div>
       )}
       {micState === 'requesting' && <span className='text-xs text-gray-500'>Waiting…</span>}
       {micActive && (
