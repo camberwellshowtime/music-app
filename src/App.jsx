@@ -44,7 +44,6 @@ export default function App() {
   const [editLabel, setEditLabel] = useState('')
   const [editTime, setEditTime] = useState(0)
   const [bookmarkMenu, setBookmarkMenu] = useState(null)
-  const [swDownload, setSwDownload] = useState(null) // null | { done, total } | 'complete'
   const pendingDeleteRef = useRef(null)
   const vocalsRef = useRef(null)
   const noVocalsRef = useRef(null)
@@ -92,7 +91,6 @@ export default function App() {
     const handler = (e) => {
       if (e.data?.type === 'sw-activated') {
         refresh()
-        if (e.data.pendingDownloads > 0) setSwDownload({ done: 0, total: e.data.pendingDownloads })
         if (!_hadController) return // first install — no need to reload
         if (vocalsRef.current && !vocalsRef.current.paused) {
           pendingSwReload.current = true // defer until music stops
@@ -100,22 +98,8 @@ export default function App() {
           doReloadRef.current()
         }
       }
-      if (e.data?.type === 'cache-progress') {
-        setSwDownload({ done: e.data.done, total: e.data.total })
-      }
-      if (e.data?.type === 'cache-complete') {
-        setSwDownload('complete')
-        setTimeout(() => setSwDownload(null), 4000)
-      }
-      if (e.data?.type === 'cache-status') {
-        if (!e.data.complete && e.data.total > 0) {
-          setSwDownload({ done: e.data.done, total: e.data.total })
-        }
-      }
     }
     sw.addEventListener('message', handler)
-    // Query current download state in case we missed messages after a reload
-    sw.controller?.postMessage({ type: 'cache-status?' })
     return () => sw.removeEventListener('message', handler)
   }, [refresh])
 
@@ -528,14 +512,6 @@ export default function App() {
         </div>
       </header>
 
-      {swDownload && (
-        <div className='px-4 py-2 bg-gray-800/80 border-b border-gray-700/60 text-xs text-gray-400 flex items-center gap-2'>
-          {swDownload === 'complete'
-            ? <span className='text-gray-500'>All songs ready offline</span>
-            : <><span className='animate-pulse text-gray-500'>↓</span> Downloading songs… {swDownload.done} / {swDownload.total}</>
-          }
-        </div>
-      )}
 
       <main className={`flex-1 overflow-y-auto ${currentSong ? 'pb-52' : ''}`}>
         {showLyrics && currentSong ? (

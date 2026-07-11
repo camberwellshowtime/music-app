@@ -1,16 +1,9 @@
-import { songs, vocalsUrl, noVocalsUrl, isolatedUrl, melodyUrl } from './songs.js'
+import { songs, melodyUrl } from './songs.js'
 
 const APP_CACHE   = 'music-app-v1'
 const AUDIO_CACHE = 'music-audio-v1'
 
-const AUDIO_URLS = songs.flatMap(song =>
-  [vocalsUrl(song), noVocalsUrl(song), isolatedUrl(song)].filter(Boolean)
-)
-
 const MELODY_URLS = songs.map(melodyUrl)
-
-// Shared state across install → activate
-const cacheState = { total: 0, done: 0, complete: true }
 
 async function getMissing(cache, urls) {
   return (await Promise.all(urls.map(async url => (await cache.match(url)) ? null : url))).filter(Boolean)
@@ -22,58 +15,26 @@ async function broadcast(msg) {
 }
 
 self.addEventListener('install', e => {
-  e.waitUntil((async () => {
-    const cache = await caches.open(AUDIO_CACHE)
-    const missingAudio = await getMissing(cache, AUDIO_URLS)
-    Object.assign(cacheState, { total: missingAudio.length, done: 0, complete: missingAudio.length === 0 })
-    await self.skipWaiting()
-  })())
+  e.waitUntil(self.skipWaiting())
 })
 
 self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     await self.clients.claim()
+    await broadcast({ type: 'sw-activated' })
 
-    // Re-check (state from install may have raced); audio drives the progress count
+    // Pre-cache melody JSONs (small, needed offline for sing-along)
     const cache = await caches.open(AUDIO_CACHE)
-    const [missingAudio, missingMelody] = await Promise.all([
-      getMissing(cache, AUDIO_URLS),
-      getMissing(cache, MELODY_URLS),
-    ])
-    Object.assign(cacheState, { total: missingAudio.length, done: 0, complete: missingAudio.length === 0 })
+    const missingMelody = await getMissing(cache, MELODY_URLS)
 
-    await broadcast({ type: 'sw-activated', pendingDownloads: cacheState.total })
-
-    if (missingAudio.length === 0 && missingMelody.length === 0) return
-
-    const onAudioDone = async () => {
-      cacheState.done++
-      if (cacheState.done >= cacheState.total) cacheState.complete = true
-      await broadcast({ type: 'cache-progress', done: cacheState.done, total: cacheState.total })
-    }
+    if (missingMelody.length === 0) return
 
     await Promise.all([
-      ...missingAudio.map(url =>
-        fetch(url)
-          .then(r => r.ok ? cache.put(url, r) : null)
-          .then(onAudioDone).catch(onAudioDone)
-      ),
       ...missingMelody.map(url =>
         fetch(url).then(r => { if (r.ok) return cache.put(url, r) }).catch(() => {})
       ),
     ])
-
-    if (missingAudio.length > 0) {
-      await broadcast({ type: 'cache-complete', downloaded: cacheState.done })
-    }
   })())
-})
-
-// Let freshly-reloaded pages catch up on in-progress downloads
-self.addEventListener('message', e => {
-  if (e.data?.type === 'cache-status?') {
-    e.source?.postMessage({ type: 'cache-status', ...cacheState })
-  }
 })
 
 self.addEventListener('fetch', e => {
