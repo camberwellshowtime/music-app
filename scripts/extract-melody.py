@@ -8,6 +8,7 @@ Entries where confidence < threshold have hz set to null (silence/noise).
 import sys
 import json
 import argparse
+import math
 import numpy as np
 import soundfile as sf
 import torchcrepe
@@ -18,6 +19,49 @@ from pathlib import Path
 
 CONFIDENCE_THRESHOLD = 0.5
 HOP_LENGTH_MS = 10  # 10ms = 100 samples/sec
+
+# Note segmentation parameters (mirrors segmentMelody in SingAlong.jsx)
+MAX_JUMP_ST = 1.5   # semitones — larger jump starts a new segment
+MAX_GAP_S   = 0.05  # seconds  — unvoiced gap smaller than this is bridged
+MIN_DUR_S   = 0.06  # seconds  — segments shorter than this are discarded
+
+def segment_melody(frames):
+    """Collapse raw CREPE frames into discrete note segments [{t, end, hz}].
+    Port of segmentMelody() from SingAlong.jsx."""
+    notes = []
+    seg = None
+    gap_lookahead = math.ceil(MAX_GAP_S / (HOP_LENGTH_MS / 1000)) + 2
+
+    def flush():
+        nonlocal seg
+        if not seg:
+            return
+        if seg['t_end'] - seg['t_start'] >= MIN_DUR_S:
+            hz_sorted = sorted(seg['hz_values'])
+            median = hz_sorted[len(hz_sorted) // 2]
+            notes.append({'t': round(seg['t_start'], 3), 'end': round(seg['t_end'], 3), 'hz': round(median, 2)})
+        seg = None
+
+    for i, d in enumerate(frames):
+        if d['hz'] is None:
+            if seg:
+                next_voiced = next((f for f in frames[i+1:i+gap_lookahead+1] if f['hz']), None)
+                if not next_voiced:
+                    flush()
+            continue
+        if seg is None:
+            seg = {'hz_values': [d['hz']], 't_start': d['t'], 't_end': d['t']}
+            continue
+        jump = abs(12 * math.log2(d['hz'] / seg['hz_values'][-1]))
+        if jump > MAX_JUMP_ST:
+            flush()
+            seg = {'hz_values': [d['hz']], 't_start': d['t'], 't_end': d['t']}
+        else:
+            seg['hz_values'].append(d['hz'])
+            seg['t_end'] = d['t']
+
+    flush()
+    return notes
 
 def decode_mp3(mp3_path: Path) -> tuple[np.ndarray, int]:
     """Use ffmpeg to decode MP3 to a temporary WAV, then read with soundfile."""
@@ -55,7 +99,7 @@ def extract_pitch(mp3_path: Path, out_path: Path):
         hop_length=hop_samples,
         fmin=32.7,   # C1 ~32 Hz
         fmax=1975.5, # B6 ~1975 Hz
-        model="tiny",   # fast; swap to "full" for higher accuracy
+        model="full",
         return_periodicity=True,
         device="cuda" if torch.cuda.is_available() else "cpu",
         batch_size=512,
@@ -66,19 +110,21 @@ def extract_pitch(mp3_path: Path, out_path: Path):
     conf_np = periodicity.squeeze().numpy()
 
     n = len(freq_np)
-    results = []
+    frames = []
     for i in range(n):
         t = round(i * HOP_LENGTH_MS / 1000, 3)
-        conf = float(round(float(conf_np[i]), 3))
+        conf = float(conf_np[i])
         hz = float(round(float(freq_np[i]), 2)) if conf >= CONFIDENCE_THRESHOLD else None
-        results.append({"t": t, "hz": hz, "conf": conf})
+        frames.append({"t": t, "hz": hz})
+
+    notes = segment_melody(frames)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
-        json.dump(results, f, separators=(",", ":"))
+        json.dump(notes, f, separators=(",", ":"))
 
-    voiced = sum(1 for r in results if r["hz"] is not None)
-    print(f"  {n} frames, {voiced} voiced ({100*voiced//n}%), saved to {out_path}", flush=True)
+    voiced = sum(1 for fr in frames if fr["hz"] is not None)
+    print(f"  {n} frames → {len(notes)} note segments, {voiced} voiced frames ({100*voiced//n}%), saved to {out_path}", flush=True)
     print(f"  File size: {out_path.stat().st_size / 1024:.1f} KB")
 
 def main():
