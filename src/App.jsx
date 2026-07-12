@@ -155,7 +155,9 @@ export default function App() {
     }
     va.load(); nv.load()
     if (pending) {
-      va.addEventListener('canplay', () => {
+      let vaReady = false, nvReady = false
+      const tryStart = () => {
+        if (!vaReady || !nvReady) return
         va.currentTime = pending.time
         nv.currentTime = pending.time
         if (is && is.src) is.currentTime = pending.time
@@ -164,7 +166,9 @@ export default function App() {
           nv.play().catch(() => {})
           if (is && is.src) is.play().catch(() => {})
         }
-      }, { once: true })
+      }
+      va.addEventListener('canplay', () => { vaReady = true; tryStart() }, { once: true })
+      nv.addEventListener('canplay', () => { nvReady = true; tryStart() }, { once: true })
     }
   }, [currentId])
 
@@ -236,9 +240,9 @@ export default function App() {
       const nv = noVocalsRef.current
       const is = isolatedRef.current
       if (!va || va.paused) return
-      if (nv && Math.abs(va.currentTime - nv.currentTime) > 0.05) nv.currentTime = va.currentTime
-      if (is?.src && Math.abs(va.currentTime - is.currentTime) > 0.05) is.currentTime = va.currentTime
-    }, 5000)
+      if (nv && Math.abs(va.currentTime - nv.currentTime) > 0.03) nv.currentTime = va.currentTime
+      if (is?.src && Math.abs(va.currentTime - is.currentTime) > 0.03) is.currentTime = va.currentTime
+    }, 500)
     return () => clearInterval(interval)
   }, [])
 
