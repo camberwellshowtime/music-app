@@ -174,9 +174,9 @@ export default function App() {
     const nv = noVocalsRef.current
     const is = isolatedRef.current
     if (!va || !nv) return
-    va.volume = mode === 'vocals'   ? 1 : 0
-    nv.volume = mode === 'no-vocals' ? 1 : 0
-    if (is) is.volume = mode === 'vocals-only' ? 1 : 0
+    va.muted  = mode !== 'vocals';    va.volume  = mode === 'vocals'      ? 1 : 0
+    nv.muted  = mode !== 'no-vocals'; nv.volume  = mode === 'no-vocals'   ? 1 : 0
+    if (is) { is.muted = mode !== 'vocals-only'; is.volume = mode === 'vocals-only' ? 1 : 0 }
   }, [mode])
 
   // Audio events — drive state from vocals element (master)
