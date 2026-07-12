@@ -169,6 +169,7 @@ export default function App() {
       }
       va.addEventListener('canplay', () => { vaReady = true; tryStart() }, { once: true })
       nv.addEventListener('canplay', () => { nvReady = true; tryStart() }, { once: true })
+      nv.addEventListener('error',   () => { nvReady = true; tryStart() }, { once: true })
     }
   }, [currentId])
 

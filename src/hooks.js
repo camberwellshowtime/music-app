@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { db, startSync, stopSync } from './db'
-import { songs, vocalsUrl, songUrls } from './songs'
+import { songs, songUrls } from './songs'
 
 const AUDIO_CACHE = 'music-audio-v1'
 
@@ -53,7 +53,7 @@ export function useDownloads() {
     const cache = await caches.open(AUDIO_CACHE)
     const keys = await cache.keys()
     const paths = new Set(keys.map(k => new URL(k.url).pathname))
-    setDownloaded(new Set(songs.filter(s => paths.has(vocalsUrl(s))).map(s => s.id)))
+    setDownloaded(new Set(songs.filter(s => songUrls(s).every(url => paths.has(url))).map(s => s.id)))
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
@@ -77,8 +77,8 @@ export function useDownloads() {
     if (!('caches' in window)) return
     const cache = await caches.open(AUDIO_CACHE)
     for (const song of songs) {
-      const cached = await cache.match(vocalsUrl(song))
-      if (!cached) await download(song)
+      const results = await Promise.all(songUrls(song).map(url => cache.match(url)))
+      if (results.some(r => !r)) await download(song)
     }
   }
 
