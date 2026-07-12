@@ -7,15 +7,49 @@ const isolatedDir = path.resolve('./vocals-isolated-128')
 const lyricsDir = path.resolve('./src/lyrics')
 const melodyDir = path.resolve('./src/data/melody')
 
+function serveAudio(file, req) {
+  const range = req.headers.get('Range')
+  if (range) {
+    const size = file.size
+    const m = /bytes=(\d+)-(\d*)/.exec(range)
+    if (m) {
+      const start = +m[1]
+      const end = m[2] ? +m[2] : size - 1
+      return new Response(file.slice(start, end + 1), {
+        status: 206,
+        headers: {
+          'Content-Range': `bytes ${start}-${end}/${size}`,
+          'Content-Length': String(end - start + 1),
+          'Accept-Ranges': 'bytes',
+          'Content-Type': file.type || 'audio/mpeg',
+        },
+      })
+    }
+  }
+  return new Response(file, { headers: { 'Accept-Ranges': 'bytes' } })
+}
+
 function serve(port) {
   try {
     return Bun.serve({
       port,
       hostname: '0.0.0.0',
       routes: {
-        '/vocals/:file': req => new Response(Bun.file(path.join(vocalsDir, decodeURIComponent(req.params.file)))),
-        '/no-vocals/:file': req => new Response(Bun.file(path.join(noVocalsDir, decodeURIComponent(req.params.file)))),
-        '/vocals-isolated/:file': req => new Response(Bun.file(path.join(isolatedDir, decodeURIComponent(req.params.file)))),
+        '/vocals/:file': async req => {
+          const file = Bun.file(path.join(vocalsDir, decodeURIComponent(req.params.file)))
+          if (!(await file.exists())) return new Response('Not found', { status: 404 })
+          return serveAudio(file, req)
+        },
+        '/no-vocals/:file': async req => {
+          const file = Bun.file(path.join(noVocalsDir, decodeURIComponent(req.params.file)))
+          if (!(await file.exists())) return new Response('Not found', { status: 404 })
+          return serveAudio(file, req)
+        },
+        '/vocals-isolated/:file': async req => {
+          const file = Bun.file(path.join(isolatedDir, decodeURIComponent(req.params.file)))
+          if (!(await file.exists())) return new Response('Not found', { status: 404 })
+          return serveAudio(file, req)
+        },
         '/lyrics/:file': async req => {
           const file = Bun.file(path.join(lyricsDir, decodeURIComponent(req.params.file)))
           if (!(await file.exists())) return new Response('Not found', { status: 404 })

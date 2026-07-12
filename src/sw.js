@@ -2,6 +2,7 @@ import { songs, melodyUrl } from './songs.js'
 
 const APP_CACHE   = 'music-app-v1'
 const AUDIO_CACHE = 'music-audio-v1'
+const KNOWN_CACHES = new Set([APP_CACHE, AUDIO_CACHE])
 
 const MELODY_URLS = songs.map(melodyUrl)
 
@@ -22,6 +23,10 @@ self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     await self.clients.claim()
     await broadcast({ type: 'sw-activated' })
+
+    // Delete any caches from old versions
+    const names = await caches.keys()
+    await Promise.all(names.filter(n => !KNOWN_CACHES.has(n)).map(n => caches.delete(n)))
 
     // Pre-cache melody JSONs (small, needed offline for sing-along)
     const cache = await caches.open(AUDIO_CACHE)

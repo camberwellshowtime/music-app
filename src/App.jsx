@@ -56,6 +56,7 @@ export default function App() {
   )
   const loopStartRef = useRef(_saved?.loopStart ?? null)
   const loopEndRef = useRef(_saved?.loopEnd ?? null)
+  const loopActiveRef = useRef(_saved?.loopActive ?? false)
   const pendingSwReload = useRef(false)
   const doReloadRef = useRef(null)
   // Track whether each overlay pushed a history entry (for back-button dismissal)
@@ -191,11 +192,13 @@ export default function App() {
     if (!va || !nv) return
     const onTime = () => {
       setCurrentTime(va.currentTime)
-      if (loopStartRef.current !== null && loopEndRef.current !== null &&
+      if (loopActiveRef.current &&
+          loopStartRef.current !== null && loopEndRef.current !== null &&
           loopEndRef.current > loopStartRef.current &&
           va.currentTime >= loopEndRef.current) {
         va.currentTime = loopStartRef.current
         nv.currentTime = loopStartRef.current
+        if (isolatedRef.current?.src) isolatedRef.current.currentTime = loopStartRef.current
       }
     }
     const onDuration = () => setDuration(isFinite(va.duration) ? va.duration : 0)
@@ -250,6 +253,7 @@ export default function App() {
   useEffect(() => {
     loopStartRef.current = null
     loopEndRef.current = null
+    loopActiveRef.current = false
     setLoopStart(null)
     setLoopEnd(null)
     setLoopActive(false)
@@ -269,6 +273,7 @@ export default function App() {
     if (song.id === currentId) {
       vocalsRef.current?.play().catch(() => {})
       noVocalsRef.current?.play().catch(() => {})
+      if (isolatedRef.current?.src) isolatedRef.current.play().catch(() => {})
       return
     }
     pendingSeek.current = { time: 0, play: true }
@@ -374,6 +379,22 @@ export default function App() {
     setEditTime(bm.time)
   }
 
+  const openEditFromMenu = (bm) => {
+    setBookmarkMenu(null)
+    if (bookmarkMenuPushedRef.current) {
+      // Replace the bookmark-menu history entry rather than popping+pushing,
+      // which would fire a popstate that sees editBookmarkPushedRef=true and close the modal.
+      history.replaceState({ editBookmark: true }, '')
+      bookmarkMenuPushedRef.current = false
+    } else {
+      history.pushState({ editBookmark: true }, '')
+    }
+    editBookmarkPushedRef.current = true
+    setEditingBookmark(bm)
+    setEditLabel(bm.label)
+    setEditTime(bm.time)
+  }
+
   const closeEditBookmark = () => {
     setEditingBookmark(null)
     if (editBookmarkPushedRef.current) {
@@ -400,6 +421,7 @@ export default function App() {
   const clearLoop = () => {
     loopStartRef.current = null
     loopEndRef.current = null
+    loopActiveRef.current = false
     setLoopStart(null)
     setLoopEnd(null)
     setLoopActive(false)
@@ -432,12 +454,14 @@ export default function App() {
   const setLoopA = (bm) => {
     loopStartRef.current = bm.time
     setLoopStart(bm.time)
+    loopActiveRef.current = true
     setLoopActive(true)
   }
 
   const setLoopB = (bm) => {
     loopEndRef.current = bm.time
     setLoopEnd(bm.time)
+    loopActiveRef.current = true
     setLoopActive(true)
   }
 
@@ -464,7 +488,7 @@ export default function App() {
               <button onClick={() => { setLoopB(bookmarkMenu); closeBookmarkMenu() }} className={`w-full text-left px-5 py-4 text-sm active:bg-gray-700 ${loopEnd === bookmarkMenu.time ? 'text-orange-400' : 'text-gray-200'}`}>
                 {loopEnd === bookmarkMenu.time ? '✓ Loop end' : 'Set loop end'}
               </button>
-              <button onClick={() => { openEditBookmark(bookmarkMenu); closeBookmarkMenu() }} className='w-full text-left px-5 py-4 text-sm text-gray-200 active:bg-gray-700'>
+              <button onClick={() => openEditFromMenu(bookmarkMenu)} className='w-full text-left px-5 py-4 text-sm text-gray-200 active:bg-gray-700'>
                 Edit
               </button>
               <button onClick={() => { handleDeleteBookmark(bookmarkMenu); closeBookmarkMenu() }} className='w-full text-left px-5 py-4 text-sm text-red-400 active:bg-gray-700'>
@@ -590,7 +614,7 @@ export default function App() {
               loopActive={loopActive}
               loopStart={loopStart}
               loopEnd={loopEnd}
-              onLoopToggle={() => setLoopActive(v => !v)}
+              onLoopToggle={() => setLoopActive(v => { loopActiveRef.current = !v; return !v })}
             />
           )}
         <div className='px-4 pt-3 pb-[max(20px,env(safe-area-inset-bottom))] space-y-2.5'>

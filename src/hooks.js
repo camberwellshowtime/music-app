@@ -73,14 +73,14 @@ export function useDownloads() {
     }
   }, [refresh])
 
-  const downloadAll = async () => {
+  const downloadAll = useCallback(async () => {
     if (!('caches' in window)) return
     const cache = await caches.open(AUDIO_CACHE)
     for (const song of songs) {
       const results = await Promise.all(songUrls(song).map(url => cache.match(url)))
       if (results.some(r => !r)) await download(song)
     }
-  }
+  }, [download])
 
   return { downloaded, downloading, download, downloadAll, refresh }
 }
