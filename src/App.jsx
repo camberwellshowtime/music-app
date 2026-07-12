@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { songs, songById, vocalsUrl, noVocalsUrl, isolatedUrl, lyricsUrl, melodyUrl } from './songs'
 import SingAlong from './SingAlong'
+import GestureMenu from './GestureMenu'
 import { addBookmark, deleteBookmark, updateBookmark, pullOnce } from './db'
 import { useBookmarks, useDownloads } from './hooks'
 
@@ -24,6 +25,79 @@ function fmt(s) {
   return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`
 }
 
+function BookmarkPill({ bm, loopStart, loopEnd, onSeek, onMenu, onGesture }) {
+  const timerRef = useRef(null)
+  const suppressRef = useRef(false)
+  const dotsRef = useRef(null)
+
+  const dotsPos = () => {
+    const r = dotsRef.current?.getBoundingClientRect()
+    return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null
+  }
+
+  const handlePointerDown = (e) => {
+    if (e.button > 0) return // left button / touch only
+    const x = e.clientX, y = e.clientY
+    const pid = e.pointerId
+
+    const cleanup = () => {
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
+      document.removeEventListener('pointercancel', onUp)
+    }
+
+    const onMove = (ev) => {
+      if (ev.pointerId !== pid) return
+      if (Math.hypot(ev.clientX - x, ev.clientY - y) > 10) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+        cleanup()
+      }
+    }
+
+    const onUp = (ev) => {
+      if (ev.pointerId !== pid) return
+      if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null }
+      cleanup()
+    }
+
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null
+      suppressRef.current = true
+      cleanup()
+      navigator.vibrate?.(20)
+      const pos = dotsPos()
+      onGesture(bm, pos?.x ?? x, pos?.y ?? y)
+    }, 400)
+
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
+    document.addEventListener('pointercancel', onUp)
+  }
+
+  return (
+    <span
+      className={`flex items-center bg-gray-700 rounded-full text-xs select-none ${loopStart === bm.time ? 'ring-1 ring-green-500/60' : loopEnd === bm.time ? 'ring-1 ring-orange-500/60' : ''}`}
+      onPointerDown={handlePointerDown}
+      onContextMenu={e => e.preventDefault()}
+    >
+      <button
+        onClick={() => { if (suppressRef.current) { suppressRef.current = false; return }; onSeek(bm.time) }}
+        className='pl-2.5 pr-1 py-1 hover:text-white transition-colors whitespace-nowrap'
+        title={fmt(bm.time)}
+      >
+        {bm.label}
+      </button>
+      <button
+        ref={dotsRef}
+        onClick={e => { e.stopPropagation(); onMenu(bm) }}
+        className='pl-1 pr-2.5 py-1 text-gray-500 hover:text-white transition-colors'
+        aria-label='Bookmark options'
+      >⋯</button>
+    </span>
+  )
+}
+
 export default function App() {
   const [currentId, setCurrentId] = useState(_saved?.currentId ?? null)
   const [mode, setMode] = useState(_saved?.mode ?? 'vocals')
@@ -44,6 +118,7 @@ export default function App() {
   const [editLabel, setEditLabel] = useState('')
   const [editTime, setEditTime] = useState(0)
   const [bookmarkMenu, setBookmarkMenu] = useState(null)
+  const [gestureMenu, setGestureMenu] = useState(null)
   const pendingDeleteRef = useRef(null)
   const vocalsRef = useRef(null)
   const noVocalsRef = useRef(null)
@@ -357,7 +432,18 @@ export default function App() {
     if (e.key === 'Escape') { setAddingBookmark(false); setLabelInput('') }
   }
 
+  const openGestureMenu = (bm, anchorX, anchorY) => {
+    setBookmarkMenu(null)
+    // bottomOffset: distance from viewport bottom to popup bottom edge
+    // Place arrow tip just above the ⋯ button (anchorY = button centre Y from top)
+    const bottomOffset = window.innerHeight - anchorY + 12
+    setGestureMenu({ bookmark: bm, anchorX, touchOrigin: { x: anchorX, y: anchorY }, bottomOffset })
+  }
+
+  const closeGestureMenu = () => setGestureMenu(null)
+
   const openBookmarkMenu = (bm) => {
+    setGestureMenu(null)
     history.pushState({ bookmarkMenu: true }, '')
     bookmarkMenuPushedRef.current = true
     setBookmarkMenu(bm)
@@ -498,6 +584,23 @@ export default function App() {
             <div className='pb-8' />
           </div>
         </div>
+      )}
+
+      {gestureMenu && (
+        <GestureMenu
+          bookmark={gestureMenu.bookmark}
+          anchorX={gestureMenu.anchorX}
+          touchOrigin={gestureMenu.touchOrigin}
+          bottomOffset={gestureMenu.bottomOffset}
+          mode='gesture'
+          loopStart={loopStart}
+          loopEnd={loopEnd}
+          onLoopA={(bm) => setLoopA(bm)}
+          onLoopB={(bm) => setLoopB(bm)}
+          onEdit={(bm) => openEditBookmark(bm)}
+          onDelete={(bm) => handleDeleteBookmark(bm)}
+          onClose={closeGestureMenu}
+        />
       )}
 
       {editingBookmark && (
@@ -698,12 +801,15 @@ export default function App() {
 
             <div className='flex-1 flex items-center gap-1.5 flex-wrap min-w-0'>
               {bookmarks.map(bm => (
-                <span key={bm._id} className={`flex items-center bg-gray-700 rounded-full text-xs ${loopStart === bm.time ? 'ring-1 ring-green-500/60' : loopEnd === bm.time ? 'ring-1 ring-orange-500/60' : ''}`}>
-                  <button onClick={() => seek(bm.time)} className='pl-2.5 pr-1 py-1 hover:text-white transition-colors whitespace-nowrap' title={fmt(bm.time)}>
-                    {bm.label}
-                  </button>
-                  <button onClick={() => openBookmarkMenu(bm)} className='pl-1 pr-2.5 py-1 text-gray-500 hover:text-white transition-colors' aria-label='Bookmark options'>⋯</button>
-                </span>
+                <BookmarkPill
+                  key={bm._id}
+                  bm={bm}
+                  loopStart={loopStart}
+                  loopEnd={loopEnd}
+                  onSeek={seek}
+                  onMenu={openBookmarkMenu}
+                  onGesture={openGestureMenu}
+                />
               ))}
               {pendingDeleteId ? (
                 <span className='flex items-center gap-1.5 text-xs text-gray-400'>
