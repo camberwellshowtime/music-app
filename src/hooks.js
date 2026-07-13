@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { db, startSync, stopSync } from './db'
+import { db, startSync, stopSync, onSyncStatus } from './db'
 import { songs, songUrls } from './songs'
 
 const AUDIO_CACHE = 'music-audio-v1'
@@ -27,21 +27,60 @@ export function useBookmarks(songId) {
   return bookmarks
 }
 
-export function useSync() {
-  const [enabled, setEnabled] = useState(() => localStorage.getItem('sync-enabled') === 'true')
+export function useMashups() {
+  const [mashups, setMashups] = useState([])
 
   useEffect(() => {
+    const load = () =>
+      db.allDocs({ include_docs: true }).then(result =>
+        setMashups(
+          result.rows
+            .map(r => r.doc)
+            .filter(d => d.type === 'mashup')
+            .sort((a, b) => b.createdAt - a.createdAt)
+        )
+      )
+    load()
+    const changes = db.changes({ live: true, since: 'now', include_docs: true })
+      .on('change', () => load())
+    return () => { changes.cancel() }
+  }, [])
+
+  return mashups
+}
+
+const SYNC_FORCE_ON = process.env.BUN_PUBLIC_SYNC_ENABLED === 'true'
+
+export function useSync() {
+  const [enabled, setEnabled] = useState(() => SYNC_FORCE_ON || localStorage.getItem('sync-enabled') === 'true')
+  const [status, setStatus] = useState(() => (SYNC_FORCE_ON || localStorage.getItem('sync-enabled') === 'true') ? 'syncing' : 'off')
+
+  useEffect(() => {
+    let timer = null
+    onSyncStatus((s) => {
+      clearTimeout(timer)
+      if (s === 'syncing') {
+        timer = setTimeout(() => setStatus('syncing'), 1500)
+      } else {
+        setStatus(s)
+      }
+    })
     if (enabled) startSync()
     else stopSync()
+    return () => { onSyncStatus(null); clearTimeout(timer) }
   }, [enabled])
 
-  const toggle = () => setEnabled(prev => {
-    const next = !prev
-    localStorage.setItem('sync-enabled', String(next))
-    return next
-  })
+  const toggle = () => {
+    if (SYNC_FORCE_ON) return
+    setEnabled(prev => {
+      const next = !prev
+      localStorage.setItem('sync-enabled', String(next))
+      if (!next) setStatus('off')
+      return next
+    })
+  }
 
-  return { enabled, toggle }
+  return { enabled, toggle, status, forceOn: SYNC_FORCE_ON }
 }
 
 export function useDownloads() {
