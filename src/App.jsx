@@ -467,6 +467,9 @@ export default function App() {
       setMashupPlaying(false)
       mashupCueIdxRef.current = 0
       setMashupCueIdx(0)
+      vocalsRef.current?.pause()
+      noVocalsRef.current?.pause()
+      isolatedRef.current?.pause()
       return
     }
     const next = cues[nextIdx]
