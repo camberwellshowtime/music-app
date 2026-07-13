@@ -167,6 +167,20 @@ export default function App() {
   const draggingRef = useRef(null)
   const [mashupUndoMsg, setMashupUndoMsg] = useState(null)
   const mashupUndoRef = useRef(null)
+  const [fadeDuration, setFadeDuration] = useState(() => parseInt(localStorage.getItem('mashup-fade-ms') ?? '1500'))
+  const [crossfadeEnabled, setCrossfadeEnabled] = useState(() => localStorage.getItem('mashup-fade-enabled') !== 'false')
+
+  // Secondary audio deck for crossfade
+  const vocalsSecRef = useRef(null)
+  const noVocalsSecRef = useRef(null)
+  const isolatedSecRef = useRef(null)
+  const currentIdRef = useRef(null)   // mirrors currentId for use in RAF callbacks
+  const modeRef = useRef('vocals')    // mirrors mode for use in RAF callbacks
+  const fadeDurationRef = useRef(fadeDuration)
+  const crossfadeEnabledRef = useRef(crossfadeEnabled)
+  const crossfadingRef = useRef(false)
+  const crossfadeRafRef = useRef(null)
+  const crossfadeCompleteRef = useRef(false) // skip audio reload when crossfade just swapped decks
 
   const currentSong = currentId ? songById(currentId) : null
   const currentIdx = songs.findIndex(s => s.id === currentId)
@@ -179,9 +193,13 @@ export default function App() {
 
   const mashups = useMashups()
   const activeMashup = mashups.find(m => m._id === activeMashupId) ?? null
-  // Keep cues ref in sync every render so timeupdate always has fresh data
+  // Keep refs in sync every render so closures always see fresh values
   mashupCuesRef.current = activeMashup?.cues ?? []
   activeMashupRef.current = activeMashup
+  currentIdRef.current = currentId
+  modeRef.current = mode
+  fadeDurationRef.current = fadeDuration
+  crossfadeEnabledRef.current = crossfadeEnabled
 
   doReloadRef.current = () => {
     sessionStorage.setItem('music-restore', JSON.stringify({
@@ -255,6 +273,12 @@ export default function App() {
     const nv = noVocalsRef.current
     const is = isolatedRef.current
     if (!va || !nv || !currentSong) return
+    // Crossfade already loaded & started the new song — just update metadata
+    if (crossfadeCompleteRef.current) {
+      crossfadeCompleteRef.current = false
+      va.dataset.songId = currentId
+      return
+    }
     const pending = pendingSeek.current
     pendingSeek.current = null
     va.pause(); nv.pause(); is?.pause()
@@ -297,18 +321,34 @@ export default function App() {
   }, [mode])
 
   useEffect(() => {
-    const va = vocalsRef.current
-    const nv = noVocalsRef.current
-    if (!va || !nv) return
-    const onTime = () => {
-      setCurrentTime(va.currentTime)
+    const vaA = vocalsRef.current
+    const nvA = noVocalsRef.current
+    const vaB = vocalsSecRef.current
+    const nvB = noVocalsSecRef.current
+    if (!vaA || !nvA || !vaB || !nvB) return
+
+    // Handlers check e.target === vocalsRef.current so they work correctly
+    // after ref swaps (where vocalsRef.current changes to point to the other deck).
+    const onTime = (e) => {
+      if (e.target !== vocalsRef.current) return
+      const t = e.target.currentTime
+      setCurrentTime(t)
       if (mashupPlayingRef.current) {
         const cues = mashupCuesRef.current
         const cue = cues[mashupCueIdxRef.current]
-        if (cue?.endTime != null && va.currentTime >= cue.endTime) {
-          advanceMashupRef.current?.()
+        if (cue?.endTime != null) {
+          const remaining = cue.endTime - t
+          const fadeSecs = fadeDurationRef.current / 1000
+          const nextIdx = mashupCueIdxRef.current + 1
+          if (crossfadeEnabledRef.current && !crossfadingRef.current && remaining > 0 && remaining <= fadeSecs) {
+            if (nextIdx < cues.length) beginCrossfadeRef.current(nextIdx)
+            else beginFadeToSilenceRef.current()
+          }
+          if (t >= cue.endTime && !crossfadingRef.current) advanceMashupRef.current?.()
         }
       } else {
+        const va = vocalsRef.current
+        const nv = noVocalsRef.current
         if (loopActiveRef.current &&
             loopStartRef.current !== null && loopEndRef.current !== null &&
             loopEndRef.current > loopStartRef.current &&
@@ -319,43 +359,42 @@ export default function App() {
         }
       }
     }
-    const setPositionState = () => {
+    const setPositionState = (el) => {
       if (!('mediaSession' in navigator)) return
       try {
         navigator.mediaSession.setPositionState?.({
-          duration: isFinite(va.duration) ? va.duration : 0,
-          playbackRate: va.playbackRate ?? 1,
-          position: Math.min(va.currentTime, isFinite(va.duration) ? va.duration : va.currentTime),
+          duration: isFinite(el.duration) ? el.duration : 0,
+          playbackRate: el.playbackRate ?? 1,
+          position: Math.min(el.currentTime, isFinite(el.duration) ? el.duration : el.currentTime),
         })
       } catch {}
     }
-    const onDuration = () => {
-      const d = isFinite(va.duration) ? va.duration : 0
+    const onDuration = (e) => {
+      if (e.target !== vocalsRef.current) return
+      const el = e.target
+      const d = isFinite(el.duration) ? el.duration : 0
       setDuration(d)
-      if (d > 0) {
-        const id = va.dataset.songId
-        if (id) songDurationsRef.current[id] = d
-      }
-      setPositionState()
+      if (d > 0) { const id = el.dataset.songId; if (id) songDurationsRef.current[id] = d }
+      setPositionState(el)
     }
-    const onPlay = () => {
+    const onPlay = (e) => {
+      if (e.target !== vocalsRef.current) return
       setIsPlaying(true)
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'playing'
-      setPositionState()
+      setPositionState(e.target)
     }
-    const onPause = () => {
+    const onPause = (e) => {
+      if (e.target !== vocalsRef.current) return
       setIsPlaying(false)
       if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'
       if (pendingSwReload.current) doReloadRef.current()
     }
-    const onEnded = () => {
-      nv.pause()
+    const onEnded = (e) => {
+      if (e.target !== vocalsRef.current) return
+      noVocalsRef.current?.pause()
       isolatedRef.current?.pause()
       if (pendingSwReload.current) { doReloadRef.current(); return }
-      if (mashupPlayingRef.current) {
-        advanceMashupRef.current?.()
-        return
-      }
+      if (mashupPlayingRef.current) { advanceMashupRef.current?.(); return }
       setCurrentId(prev => {
         const idx = songs.findIndex(s => s.id === prev)
         if (idx < songs.length - 1) {
@@ -366,21 +405,27 @@ export default function App() {
         return prev
       })
     }
-    va.addEventListener('timeupdate', onTime)
-    va.addEventListener('loadedmetadata', onDuration)
-    va.addEventListener('durationchange', onDuration)
-    va.addEventListener('play', onPlay)
-    va.addEventListener('pause', onPause)
-    va.addEventListener('ended', onEnded)
-    return () => {
-      va.removeEventListener('timeupdate', onTime)
-      va.removeEventListener('loadedmetadata', onDuration)
-      va.removeEventListener('durationchange', onDuration)
-      va.removeEventListener('play', onPlay)
-      va.removeEventListener('pause', onPause)
-      va.removeEventListener('ended', onEnded)
+
+    const decks = [vaA, vaB]
+    for (const el of decks) {
+      el.addEventListener('timeupdate', onTime)
+      el.addEventListener('loadedmetadata', onDuration)
+      el.addEventListener('durationchange', onDuration)
+      el.addEventListener('play', onPlay)
+      el.addEventListener('pause', onPause)
+      el.addEventListener('ended', onEnded)
     }
-  }, [])
+    return () => {
+      for (const el of decks) {
+        el.removeEventListener('timeupdate', onTime)
+        el.removeEventListener('loadedmetadata', onDuration)
+        el.removeEventListener('durationchange', onDuration)
+        el.removeEventListener('play', onPlay)
+        el.removeEventListener('pause', onPause)
+        el.removeEventListener('ended', onEnded)
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -419,6 +464,7 @@ export default function App() {
       if (isolatedRef.current?.src) isolatedRef.current.play().catch(() => {})
       return
     }
+    cancelCrossfade()
     stopMashup()
     pendingSeek.current = { time: 0, play: true }
     setCurrentId(song.id)
@@ -460,6 +506,7 @@ export default function App() {
 
   // advanceMashupRef updated every render so it always captures current closures
   advanceMashupRef.current = () => {
+    if (crossfadingRef.current) return // crossfade is handling the advance
     const cues = mashupCuesRef.current
     const nextIdx = mashupCueIdxRef.current + 1
     if (nextIdx >= cues.length) {
@@ -485,6 +532,10 @@ export default function App() {
       setDuration(0)
     }
   }
+
+  // Refs for crossfade functions (assigned later, needed by onTime above)
+  const beginCrossfadeRef = useRef(null)
+  const beginFadeToSilenceRef = useRef(null)
 
   const seekInMashupRef = useRef(null)
   seekInMashupRef.current = (delta) => {
@@ -543,6 +594,7 @@ export default function App() {
 
   const prevSong = () => {
     if (currentIdx <= 0) return
+    cancelCrossfade()
     stopMashup()
     pendingSeek.current = { time: 0, play: !vocalsRef.current?.paused }
     setCurrentId(songs[currentIdx - 1].id)
@@ -551,6 +603,7 @@ export default function App() {
 
   const nextSong = () => {
     if (currentIdx >= songs.length - 1) return
+    cancelCrossfade()
     stopMashup()
     pendingSeek.current = { time: 0, play: !vocalsRef.current?.paused }
     setCurrentId(songs[currentIdx + 1].id)
@@ -715,7 +768,151 @@ export default function App() {
 
   // ── Mashup handlers ────────────────────────────────────────────────────────
 
+  const cancelCrossfade = () => {
+    if (crossfadeRafRef.current) { cancelAnimationFrame(crossfadeRafRef.current); crossfadeRafRef.current = null }
+    crossfadingRef.current = false
+    // Silence & stop the secondary deck
+    const vS = vocalsSecRef.current; const nvS = noVocalsSecRef.current; const iS = isolatedSecRef.current
+    if (vS) { vS.pause(); vS.src = ''; vS.volume = 0 }
+    if (nvS) { nvS.pause(); nvS.src = ''; nvS.volume = 0 }
+    if (iS) { iS.pause(); iS.src = ''; iS.volume = 0 }
+    // Restore primary volumes
+    const m = modeRef.current
+    const vP = vocalsRef.current; const nvP = noVocalsRef.current; const iP = isolatedRef.current
+    if (vP) { vP.volume = m === 'vocals' ? 1 : 0; vP.muted = m !== 'vocals' }
+    if (nvP) { nvP.volume = m === 'no-vocals' ? 1 : 0; nvP.muted = m !== 'no-vocals' }
+    if (iP) { iP.volume = m === 'vocals-only' ? 1 : 0; iP.muted = m !== 'vocals-only' }
+  }
+
+  // completeCrossfadeTransition: called at t=1 from the RAF loop.
+  // Swaps primary/secondary refs so all existing code transparently uses the new deck.
+  const completeCrossfadeTransition = (nextCueIdx) => {
+    // Stop and silence the outgoing (primary) deck before swap
+    const outV = vocalsRef.current; const outNv = noVocalsRef.current; const outIso = isolatedRef.current
+    outV.pause(); outNv.pause(); outIso?.pause()
+    outV.volume = 0; outNv.volume = 0; if (outIso) outIso.volume = 0
+
+    // Swap refs — after this, vocalsRef.current is the incoming (now playing) element
+    ;[vocalsRef.current, vocalsSecRef.current] = [vocalsSecRef.current, vocalsRef.current]
+    ;[noVocalsRef.current, noVocalsSecRef.current] = [noVocalsSecRef.current, noVocalsRef.current]
+    ;[isolatedRef.current, isolatedSecRef.current] = [isolatedSecRef.current, isolatedRef.current]
+
+    // Restore correct muted/volume on new primary
+    const m = modeRef.current
+    vocalsRef.current.volume = m === 'vocals' ? 1 : 0; vocalsRef.current.muted = m !== 'vocals'
+    noVocalsRef.current.volume = m === 'no-vocals' ? 1 : 0; noVocalsRef.current.muted = m !== 'no-vocals'
+    if (isolatedRef.current) { isolatedRef.current.volume = m === 'vocals-only' ? 1 : 0; isolatedRef.current.muted = m !== 'vocals-only' }
+
+    crossfadingRef.current = false
+    crossfadeRafRef.current = null
+
+    const cues = mashupCuesRef.current
+    const next = cues[nextCueIdx]
+    mashupCueIdxRef.current = nextCueIdx
+    setMashupCueIdx(nextCueIdx)
+
+    if (next && next.songId !== currentIdRef.current) {
+      crossfadeCompleteRef.current = true  // tell currentId effect to skip audio reload
+      setCurrentId(next.songId)
+    }
+  }
+
+  // beginCrossfade: loads next cue into secondary deck and starts the gain ramp
+  beginCrossfadeRef.current = (nextCueIdx) => {
+    if (crossfadingRef.current) return
+    crossfadingRef.current = true
+
+    const cues = mashupCuesRef.current
+    const next = cues[nextCueIdx]
+    if (!next) { crossfadingRef.current = false; return }
+
+    const nextSongObj = songById(next.songId)
+    if (!nextSongObj) { crossfadingRef.current = false; return }
+
+    const inV = vocalsSecRef.current; const inNv = noVocalsSecRef.current; const inIso = isolatedSecRef.current
+    const outV = vocalsRef.current;   const outNv = noVocalsRef.current;   const outIso = isolatedRef.current
+
+    // Load secondary deck with next song
+    inV.src = vocalsUrl(nextSongObj)
+    inNv.src = noVocalsUrl(nextSongObj) ?? vocalsUrl(nextSongObj)
+    if (inIso) { const u = isolatedUrl(nextSongObj); inIso.src = u ?? '' }
+    inV.muted = false; inNv.muted = false; if (inIso) inIso.muted = false
+    inV.volume = 0; inNv.volume = 0; if (inIso) inIso.volume = 0
+    inV.dataset.songId = next.songId
+    inV.load(); inNv.load()
+
+    let started = false
+    const fallbackTimer = setTimeout(() => {
+      if (!started) { crossfadingRef.current = false; inV.src = ''; inNv.src = ''; if (inIso) inIso.src = '' }
+    }, fadeDurationRef.current + 3000)
+
+    const startFade = () => {
+      if (started) return
+      started = true
+      clearTimeout(fallbackTimer)
+
+      inV.currentTime = next.time; inNv.currentTime = next.time
+      if (inIso?.src) inIso.currentTime = next.time
+
+      const wasPlaying = !outV.paused
+      if (wasPlaying) {
+        inV.play().catch(() => {}); inNv.play().catch(() => {})
+        if (inIso?.src) inIso.play().catch(() => {})
+      }
+
+      const dur = fadeDurationRef.current
+      const t0 = performance.now()
+
+      const tick = (now) => {
+        const p = Math.min(1, (now - t0) / dur)
+        const m = modeRef.current
+        outV.volume = m === 'vocals' ? (1 - p) : 0
+        outNv.volume = m === 'no-vocals' ? (1 - p) : 0
+        if (outIso) outIso.volume = m === 'vocals-only' ? (1 - p) : 0
+        inV.volume = m === 'vocals' ? p : 0
+        inNv.volume = m === 'no-vocals' ? p : 0
+        if (inIso) inIso.volume = m === 'vocals-only' ? p : 0
+        if (p < 1) crossfadeRafRef.current = requestAnimationFrame(tick)
+        else completeCrossfadeTransition(nextCueIdx)
+      }
+      crossfadeRafRef.current = requestAnimationFrame(tick)
+    }
+
+    if (inV.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) startFade()
+    else inV.addEventListener('canplay', startFade, { once: true })
+  }
+
+  // beginFadeToSilence: for the last cue — fades out then stops
+  beginFadeToSilenceRef.current = () => {
+    if (crossfadingRef.current) return
+    crossfadingRef.current = true
+    const outV = vocalsRef.current; const outNv = noVocalsRef.current; const outIso = isolatedRef.current
+    const dur = fadeDurationRef.current
+    const t0 = performance.now()
+    const tick = (now) => {
+      const p = Math.min(1, (now - t0) / dur)
+      const m = modeRef.current
+      outV.volume = m === 'vocals' ? (1 - p) : 0
+      outNv.volume = m === 'no-vocals' ? (1 - p) : 0
+      if (outIso) outIso.volume = m === 'vocals-only' ? (1 - p) : 0
+      if (p < 1) {
+        crossfadeRafRef.current = requestAnimationFrame(tick)
+      } else {
+        outV.pause(); outNv.pause(); outIso?.pause()
+        const m2 = modeRef.current
+        outV.volume = m2 === 'vocals' ? 1 : 0; outV.muted = m2 !== 'vocals'
+        outNv.volume = m2 === 'no-vocals' ? 1 : 0; outNv.muted = m2 !== 'no-vocals'
+        if (outIso) { outIso.volume = m2 === 'vocals-only' ? 1 : 0; outIso.muted = m2 !== 'vocals-only' }
+        crossfadingRef.current = false; crossfadeRafRef.current = null
+        mashupPlayingRef.current = false; setMashupPlaying(false)
+        mashupCueIdxRef.current = 0; setMashupCueIdx(0)
+      }
+    }
+    crossfadeRafRef.current = requestAnimationFrame(tick)
+  }
+
   const stopMashup = () => {
+    cancelCrossfade()
     mashupPlayingRef.current = false
     setMashupPlaying(false)
     mashupCueIdxRef.current = 0
@@ -724,6 +921,7 @@ export default function App() {
 
   const playMashupFromStart = () => {
     if (!activeMashup || activeMashup.cues.length === 0) return
+    cancelCrossfade()
     const cue = activeMashup.cues[0]
     mashupCueIdxRef.current = 0
     setMashupCueIdx(0)
@@ -742,6 +940,7 @@ export default function App() {
   }
 
   const jumpToMashupCue = (idx) => {
+    cancelCrossfade()
     const cues = activeMashup?.cues ?? []
     const cue = cues[idx]
     if (!cue) return
@@ -1050,6 +1249,10 @@ export default function App() {
       <audio ref={vocalsRef} preload='metadata' playsInline />
       <audio ref={noVocalsRef} preload='metadata' playsInline />
       <audio ref={isolatedRef} preload='metadata' playsInline />
+      {/* Secondary deck for crossfade */}
+      <audio ref={vocalsSecRef} preload='metadata' playsInline />
+      <audio ref={noVocalsSecRef} preload='metadata' playsInline />
+      <audio ref={isolatedSecRef} preload='metadata' playsInline />
 
       {bookmarkMenu && (
         <div className='fixed inset-0 z-50 flex flex-col justify-end' onClick={closeBookmarkMenu}>
@@ -1309,6 +1512,27 @@ export default function App() {
                     )}
                   </div>
                 )}
+
+                <div className='px-5 py-3 border-b border-gray-700/40'>
+                  <div className='flex items-center justify-between'>
+                    <span className='text-xs text-gray-400 font-medium uppercase tracking-wide'>Crossfade</span>
+                    <button
+                      onClick={() => { const next = !crossfadeEnabled; setCrossfadeEnabled(next); localStorage.setItem('mashup-fade-enabled', String(next)) }}
+                      className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${crossfadeEnabled ? 'border-purple-600 text-purple-400' : 'border-gray-600 text-gray-500'}`}
+                    >{crossfadeEnabled ? 'On' : 'Off'}</button>
+                  </div>
+                  {crossfadeEnabled && (
+                    <div className='mt-2.5 flex items-center gap-3'>
+                      <input
+                        type='range' min={300} max={5000} step={100}
+                        value={fadeDuration}
+                        onChange={e => { const v = parseInt(e.target.value); setFadeDuration(v); localStorage.setItem('mashup-fade-ms', String(v)) }}
+                        className='flex-1 h-1 accent-purple-500 cursor-pointer'
+                      />
+                      <span className='text-xs text-gray-400 tabular-nums w-10 text-right'>{(fadeDuration / 1000).toFixed(1)}s</span>
+                    </div>
+                  )}
+                </div>
 
                 <div className='px-5 py-4'>
                   <div className='flex items-center justify-between mb-3'>
