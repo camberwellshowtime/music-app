@@ -311,6 +311,7 @@ export default function App() {
   }, [currentId])
 
   useEffect(() => {
+    if (crossfadingRef.current) return // RAF tick manages volumes during crossfade
     const va = vocalsRef.current
     const nv = noVocalsRef.current
     const is = isolatedRef.current
@@ -805,6 +806,12 @@ export default function App() {
 
     crossfadingRef.current = false
     crossfadeRafRef.current = null
+
+    // Sync duration state from the new primary (loadedmetadata was blocked while secondary)
+    const newVa = vocalsRef.current
+    const d = isFinite(newVa.duration) ? newVa.duration : 0
+    setDuration(d)
+    if (d > 0 && newVa.dataset.songId) songDurationsRef.current[newVa.dataset.songId] = d
 
     const cues = mashupCuesRef.current
     const next = cues[nextCueIdx]
