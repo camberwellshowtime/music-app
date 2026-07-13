@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, Fragment } from 'react'
 import { songs, songById, vocalsUrl, noVocalsUrl, isolatedUrl, lyricsUrl, melodyUrl } from './songs'
 import SingAlong from './SingAlong'
 import GestureMenu from './GestureMenu'
-import { addBookmark, deleteBookmark, updateBookmark, createMashup, deleteMashup as deleteMashupDoc, updateMashupCues, pullOnce } from './db'
+import { addBookmark, deleteBookmark, updateBookmark, createMashup, deleteMashup as deleteMashupDoc, renameMashup, updateMashupCues, pullOnce } from './db'
 import { useBookmarks, useDownloads, useMashups, useSync } from './hooks'
 
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || !!navigator.standalone
@@ -129,6 +129,8 @@ export default function App() {
   const [mashupCueIdx, setMashupCueIdx] = useState(0)
   const [creatingMashup, setCreatingMashup] = useState(false)
   const [newMashupName, setNewMashupName] = useState('')
+  const [renamingMashup, setRenamingMashup] = useState(false)
+  const [renameInput, setRenameInput] = useState('')
   const [newMashupAuthor, setNewMashupAuthor] = useState(() => localStorage.getItem('mashup-author') ?? '')
   const pendingDeleteRef = useRef(null)
   const vocalsRef = useRef(null)
@@ -907,6 +909,23 @@ export default function App() {
     document.addEventListener('pointerup', onUp)
   }
 
+  const startRenameMashup = () => {
+    setRenameInput(activeMashup?.name ?? '')
+    setRenamingMashup(true)
+  }
+
+  const handleRenameMashup = async () => {
+    const name = renameInput.trim()
+    if (!name || !activeMashup) return
+    setRenamingMashup(false)
+    await renameMashup(activeMashup, name)
+  }
+
+  const handleRenameKeyDown = (e) => {
+    if (e.key === 'Enter') handleRenameMashup()
+    if (e.key === 'Escape') setRenamingMashup(false)
+  }
+
   const openMashupPanel = () => {
     history.pushState({ mashupPanel: true }, '')
     mashupPanelPushedRef.current = true
@@ -1207,9 +1226,27 @@ export default function App() {
                 {activeMashup && (
                   <div className='px-5 py-4 border-b border-gray-700/40'>
                     <div className='flex items-start justify-between mb-3 gap-3'>
-                      <div className='min-w-0'>
-                        <div className='text-sm font-semibold text-white truncate'>{activeMashup.name}</div>
-                        <div className='text-xs text-gray-400'>by {activeMashup.author}</div>
+                      <div className='min-w-0 flex-1'>
+                        {renamingMashup ? (
+                          <div className='flex items-center gap-1.5'>
+                            <input
+                              autoFocus
+                              value={renameInput}
+                              onChange={e => setRenameInput(e.target.value)}
+                              onKeyDown={handleRenameKeyDown}
+                              className='flex-1 min-w-0 text-sm bg-gray-700 border border-gray-500 rounded-lg px-2 py-1 text-white outline-none focus:border-gray-300'
+                            />
+                            <button onClick={handleRenameMashup} disabled={!renameInput.trim()} className='text-xs text-green-400 hover:text-green-300 disabled:opacity-40 shrink-0'>✓</button>
+                            <button onClick={() => setRenamingMashup(false)} className='text-xs text-gray-500 hover:text-gray-300 shrink-0'>✕</button>
+                          </div>
+                        ) : (
+                          <button onClick={startRenameMashup} className='text-left group w-full min-w-0'>
+                            <div className='text-sm font-semibold text-white truncate group-hover:text-gray-200'>
+                              {activeMashup.name} <span className='text-gray-600 group-hover:text-gray-400 font-normal text-xs'>✎</span>
+                            </div>
+                            <div className='text-xs text-gray-400'>by {activeMashup.author}</div>
+                          </button>
+                        )}
                       </div>
                       <div className='flex gap-2 shrink-0'>
                         {mashupPlaying ? (
@@ -1410,7 +1447,25 @@ export default function App() {
           <div className='px-4 py-3 bg-gray-900 border-b border-purple-900/50 flex items-center gap-3 shrink-0'>
             <div className='flex-1 min-w-0'>
               <div className='text-[10px] text-purple-400 font-medium uppercase tracking-widest'>Mashup</div>
-              <div className='text-white font-bold text-base leading-tight truncate'>{activeMashup.name}</div>
+              {renamingMashup ? (
+                <div className='flex items-center gap-1.5 mt-0.5'>
+                  <input
+                    autoFocus
+                    value={renameInput}
+                    onChange={e => setRenameInput(e.target.value)}
+                    onKeyDown={handleRenameKeyDown}
+                    className='flex-1 min-w-0 text-sm bg-gray-800 border border-gray-600 rounded-lg px-2 py-1 text-white outline-none focus:border-gray-400'
+                  />
+                  <button onClick={handleRenameMashup} disabled={!renameInput.trim()} className='text-xs text-green-400 hover:text-green-300 disabled:opacity-40 shrink-0'>✓</button>
+                  <button onClick={() => setRenamingMashup(false)} className='text-xs text-gray-500 hover:text-gray-300 shrink-0'>✕</button>
+                </div>
+              ) : (
+                <button onClick={startRenameMashup} className='text-left group w-full min-w-0'>
+                  <div className='text-white font-bold text-base leading-tight truncate group-hover:text-gray-200'>
+                    {activeMashup.name} <span className='text-gray-600 group-hover:text-gray-400 font-normal text-xs'>✎</span>
+                  </div>
+                </button>
+              )}
               <div className='text-xs text-gray-500 leading-tight'>
                 by {activeMashup.author}{durStr ? <span className='ml-2 tabular-nums'>{durStr}</span> : null}
               </div>
