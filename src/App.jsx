@@ -163,6 +163,8 @@ export default function App() {
   const [wakeLockActive, setWakeLockActive] = useState(false)
   const [dragging, setDragging] = useState(null) // { fromIdx, dropIdx }
   const draggingRef = useRef(null)
+  const [mashupUndoMsg, setMashupUndoMsg] = useState(null)
+  const mashupUndoRef = useRef(null)
 
   const currentSong = currentId ? songById(currentId) : null
   const currentIdx = songs.findIndex(s => s.id === currentId)
@@ -795,8 +797,26 @@ export default function App() {
     if (e.key === 'Escape') closeEditCue()
   }
 
+  const saveMashupUndo = (prevCues, msg) => {
+    if (mashupUndoRef.current) clearTimeout(mashupUndoRef.current.timer)
+    const timer = setTimeout(() => { mashupUndoRef.current = null; setMashupUndoMsg(null) }, 5000)
+    mashupUndoRef.current = { prevCues, timer }
+    setMashupUndoMsg(msg)
+  }
+
+  const handleUndoMashupAction = async () => {
+    const u = mashupUndoRef.current
+    const mashup = activeMashupRef.current
+    if (!u || !mashup) return
+    clearTimeout(u.timer)
+    mashupUndoRef.current = null
+    setMashupUndoMsg(null)
+    await updateMashupCues(mashup, u.prevCues)
+  }
+
   const removeMashupCue = async (cueId) => {
     if (!activeMashup) return
+    saveMashupUndo(activeMashup.cues, 'Cue removed')
     const newCues = activeMashup.cues.filter(c => c.id !== cueId)
     await updateMashupCues(activeMashup, newCues)
     if (mashupCueIdxRef.current >= newCues.length) {
@@ -823,10 +843,16 @@ export default function App() {
     if (e.key === 'Escape') setCreatingMashup(false)
   }
 
+  const clearMashupUndo = () => {
+    if (mashupUndoRef.current) { clearTimeout(mashupUndoRef.current.timer); mashupUndoRef.current = null }
+    setMashupUndoMsg(null)
+  }
+
   const selectMashup = (id) => {
     setActiveMashupId(id)
     localStorage.setItem('mashup-active-id', id)
     stopMashup()
+    clearMashupUndo()
   }
 
   const handleDeleteMashup = async (mashup) => {
@@ -869,9 +895,11 @@ export default function App() {
       if (!s || !mashup) return
       const { fromIdx: from, dropIdx: to } = s
       if (from === to || from + 1 === to) return
+      const prevCues = [...mashup.cues]
       const cues = [...mashup.cues]
       const [item] = cues.splice(from, 1)
       cues.splice(to > from ? to - 1 : to, 0, item)
+      saveMashupUndo(prevCues, 'Cue reordered')
       await updateMashupCues(mashup, cues)
     }
 
@@ -1231,6 +1259,12 @@ export default function App() {
                             </Fragment>
                           )
                         })}
+                        {mashupUndoMsg && (
+                          <div className='flex items-center justify-center gap-2 pt-1 text-xs text-gray-400'>
+                            <span>{mashupUndoMsg}</span>
+                            <button onClick={handleUndoMashupAction} className='text-blue-400 hover:text-blue-300 font-medium'>Undo</button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1415,11 +1449,19 @@ export default function App() {
                     <span className={`text-xs tabular-nums shrink-0 ${isActive ? 'text-purple-300' : 'text-gray-600'}`}>
                       {fmt(cue.time)}{cue.endTime != null ? `–${fmt(cue.endTime)}` : ''}
                     </span>
+                    <button onClick={e => { e.stopPropagation(); openEditCue(cue) }} className='text-gray-600 hover:text-white px-1 shrink-0 transition-colors' aria-label='Edit cue'>✎</button>
+                    <button onClick={e => { e.stopPropagation(); removeMashupCue(cue.id) }} className='text-gray-600 hover:text-red-400 px-1 shrink-0 transition-colors' aria-label='Remove cue'>✕</button>
                   </div>
                   {dragging?.dropIdx === i + 1 && <div className='h-0.5 bg-purple-500 rounded mx-1 shrink-0' />}
                 </Fragment>
               )
             })}
+            {mashupUndoMsg && (
+              <div className='flex items-center justify-center gap-2 py-2 text-xs text-gray-400'>
+                <span>{mashupUndoMsg}</span>
+                <button onClick={handleUndoMashupAction} className='text-blue-400 hover:text-blue-300 font-medium'>Undo</button>
+              </div>
+            )}
           </div>
         </div>
         )
