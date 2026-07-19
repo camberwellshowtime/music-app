@@ -14,7 +14,7 @@ export const seedBookmarks = [
   { songId: '1.6', time: 96.42, label: 'V3', source: 'whisper-medium' },
   { songId: '1.6', time: 124.683, label: 'Bridge', source: 'whisper-medium' },
   { songId: '1.6', time: 150.445, label: 'C2', source: 'whisper-medium' },
-  { songId: '2.2', time: 0, label: 'Intro', source: 'whisper-medium' },
+  { songId: '2.2', time: 0.0, label: 'Intro', source: 'whisper-medium' },
   { songId: '2.2', time: 28.209, label: 'V1', source: 'whisper-medium' },
   { songId: '2.2', time: 38.411, label: 'V2', source: 'whisper-medium' },
   { songId: '2.2', time: 47.408, label: 'V3', source: 'whisper-medium' },
@@ -54,7 +54,7 @@ export const seedBookmarks = [
   { songId: '5.1', time: 76.736, label: 'B1', source: 'whisper-medium' },
   { songId: '5.1', time: 87.238, label: 'B2', source: 'whisper-medium' },
   { songId: '5.1', time: 98.401, label: 'Double Chorus', source: 'whisper-medium' },
-  { songId: '5.6', time: 0, label: 'Intro', source: 'whisper-medium' },
+  { songId: '5.6', time: 0.0, label: 'Intro', source: 'whisper-medium' },
   { songId: '5.6', time: 5.806, label: 'V1', source: 'whisper-medium' },
   { songId: '5.6', time: 20.689, label: 'V2', source: 'whisper-medium' },
   { songId: '5.6', time: 32.913, label: 'Pre-C1', source: 'whisper-medium' },
@@ -81,4 +81,10 @@ export const seedBookmarks = [
   { songId: '7.2', time: 32.445, label: 'S3', source: 'whisper-medium' },
   { songId: '7.2', time: 44.79, label: 'S4', source: 'whisper-medium' },
   { songId: '7.2', time: 68.237, label: 'S5', source: 'whisper-medium' },
+  { songId: '7.4', time: 0.0, label: 'A Real Song', source: 'whisper-medium' },
+  { songId: '7.4', time: 31.72, label: 'Happiest Place on Earth', source: 'whisper-medium' },
+  { songId: '7.4', time: 61.58, label: 'Back in My Day', source: 'whisper-medium' },
+  { songId: '7.4', time: 100.06, label: 'In a Funk', source: 'whisper-medium' },
+  { songId: '7.4', time: 137.06, label: 'One of Us', source: 'whisper-medium' },
+  { songId: '7.4', time: 180.12, label: 'Into the Sky', source: 'whisper-medium' }
 ]

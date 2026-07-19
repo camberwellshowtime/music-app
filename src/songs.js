@@ -13,6 +13,7 @@ export const songs = [
   { id: '6.2', title: 'Never Be Sad Again',      vocalsFile: '6.2 Never Be Sad Again.mp3',          noVocalsFile: '6.2 Never Be Sad Again (No Vocals).mp3',            isolatedFile: '6.2.mp3' },
   { id: '6.6', title: 'Stop the Music',          vocalsFile: '6.6 Stop the Music.mp3',              noVocalsFile: '6.6 Stop the Music (No Vocals).mp3',                isolatedFile: '6.6.mp3' },
   { id: '7.2', title: 'Tower, Tower',            vocalsFile: '7.2 Tower, Tower.mp3',                noVocalsFile: '7.2 Tower, Tower (No Vocals).mp3',                  isolatedFile: '7.2.mp3' },
+  { id: '7.4', title: 'Megamix Part 1',          vocalsFile: '7.4 Megamix Part 1.mp3',              noVocalsFile: '7.4 Megamix Part 1 (No Vocals).mp3',                isolatedFile: '7.4.mp3',   precacheAudio: true },
   { id: '8.1', title: 'Scarves of Blue',         vocalsFile: '8.1 Scarves of Blue (2026).mp3',      noVocalsFile: '8.1 Scarves of Blue (No Vocals).mp3',               isolatedFile: '8.1.mp3' },
 ]
 

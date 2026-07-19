@@ -1,10 +1,13 @@
-import { songs, melodyUrl } from './songs.js'
+import { songs, melodyUrl, vocalsUrl, noVocalsUrl } from './songs.js'
 
 const APP_CACHE   = 'music-app-v1'
 const AUDIO_CACHE = 'music-audio-v1'
 const KNOWN_CACHES = new Set([APP_CACHE, AUDIO_CACHE])
 
 const MELODY_URLS = songs.map(melodyUrl)
+const AUDIO_PRECACHE_URLS = songs
+  .filter(s => s.precacheAudio)
+  .flatMap(s => [vocalsUrl(s), noVocalsUrl(s)].filter(Boolean))
 
 async function getMissing(cache, urls) {
   return (await Promise.all(urls.map(async url => (await cache.match(url)) ? null : url))).filter(Boolean)
@@ -28,17 +31,19 @@ self.addEventListener('activate', e => {
     const names = await caches.keys()
     await Promise.all(names.filter(n => !KNOWN_CACHES.has(n)).map(n => caches.delete(n)))
 
-    // Pre-cache melody JSONs (small, needed offline for sing-along)
     const cache = await caches.open(AUDIO_CACHE)
+
+    // Pre-cache melody JSONs (small, needed offline for sing-along)
     const missingMelody = await getMissing(cache, MELODY_URLS)
+    await Promise.all(missingMelody.map(url =>
+      fetch(url).then(r => { if (r.ok) return cache.put(url, r) }).catch(() => {})
+    ))
 
-    if (missingMelody.length === 0) return
-
-    await Promise.all([
-      ...missingMelody.map(url =>
-        fetch(url).then(r => { if (r.ok) return cache.put(url, r) }).catch(() => {})
-      ),
-    ])
+    // Pre-cache audio for new songs so installed apps get them without needing to play first
+    const missingAudio = await getMissing(cache, AUDIO_PRECACHE_URLS)
+    await Promise.all(missingAudio.map(url =>
+      fetch(url).then(r => { if (r.ok) return cache.put(url, r) }).catch(() => {})
+    ))
   })())
 })
 
