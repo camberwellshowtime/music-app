@@ -8,28 +8,31 @@ const ACTIONS = [
 ]
 
 export default function GestureMenu({
-  bookmark, anchorX, touchOrigin, bottomOffset, mode,
+  bookmark, anchorX, touchOrigin, bottomOffset, mode, pointerId,
   loopStart, loopEnd,
   onLoopA, onLoopB, onEdit, onDelete, onClose,
+  activeMashupName, onMashup,
 }) {
   const [activeId, setActiveId] = useState(null)
   const activeIdRef = useRef(null)
   const btnRefs = useRef({})
   const cbRef = useRef({})
-  cbRef.current = { onLoopA, onLoopB, onEdit, onDelete, onClose }
+  cbRef.current = { onLoopA, onLoopB, onEdit, onDelete, onClose, onMashup }
   const bmRef = useRef(bookmark)
   bmRef.current = bookmark
+  const captureRef = useRef(null)
 
   const updateActive = (id) => { activeIdRef.current = id; setActiveId(id) }
 
   const fire = (id) => {
-    const { onClose: close, onLoopA: la, onLoopB: lb, onEdit: ed, onDelete: del } = cbRef.current
+    const { onClose: close, onLoopA: la, onLoopB: lb, onEdit: ed, onDelete: del, onMashup: mash } = cbRef.current
     close()
     const bm = bmRef.current
     if (id === 'loopA') la(bm)
     else if (id === 'loopB') lb(bm)
     else if (id === 'edit') ed(bm)
     else if (id === 'delete') del(bm)
+    else if (id === 'mashup') mash?.(bm)
   }
 
   useEffect(() => {
@@ -53,19 +56,35 @@ export default function GestureMenu({
       else cbRef.current.onClose()
     }
 
-    document.addEventListener('pointermove', onMove)
-    document.addEventListener('pointerup', onUp)
-    return () => {
-      document.removeEventListener('pointermove', onMove)
-      document.removeEventListener('pointerup', onUp)
+    const el = captureRef.current
+    if (el && pointerId != null) {
+      try { el.setPointerCapture(pointerId) } catch {}
+      el.addEventListener('pointermove', onMove)
+      el.addEventListener('pointerup', onUp)
+      el.addEventListener('pointercancel', onUp)
+      return () => {
+        el.removeEventListener('pointermove', onMove)
+        el.removeEventListener('pointerup', onUp)
+        el.removeEventListener('pointercancel', onUp)
+      }
+    } else {
+      document.addEventListener('pointermove', onMove)
+      document.addEventListener('pointerup', onUp)
+      return () => {
+        document.removeEventListener('pointermove', onMove)
+        document.removeEventListener('pointerup', onUp)
+      }
     }
-  }, [mode, touchOrigin]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, touchOrigin, pointerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const menuW = 168
   const left = Math.max(8, Math.min((window.innerWidth ?? 400) - menuW - 8, (anchorX ?? 200) - menuW / 2))
 
   return (
     <>
+      {mode === 'gesture' && (
+        <div ref={captureRef} className='fixed inset-0 z-40' style={{ touchAction: 'none' }} />
+      )}
       {mode === 'tap' && (
         <div className='fixed inset-0 z-40' onClick={onClose} onTouchEnd={onClose} />
       )}
@@ -104,6 +123,24 @@ export default function GestureMenu({
                 </button>
               )
             })}
+            {activeMashupName && (
+              <button
+                ref={el => { btnRefs.current['mashup'] = el }}
+                onClick={mode === 'tap' ? () => fire('mashup') : undefined}
+                className={[
+                  'col-span-2 flex items-center justify-center gap-1.5 h-9 rounded-xl transition-all duration-75 select-none',
+                  activeId === 'mashup'
+                    ? 'bg-purple-500/20 ring-2 ring-purple-400/60 scale-105'
+                    : 'bg-gray-700/60 ring-1 ring-gray-600/50',
+                  mode === 'tap' ? 'active:scale-95' : '',
+                ].join(' ')}
+              >
+                <span className={`text-sm font-bold leading-none ${activeId === 'mashup' ? 'text-white' : 'text-purple-400'}`}>+</span>
+                <span className={`text-[10px] leading-none truncate max-w-[110px] ${activeId === 'mashup' ? 'text-white' : 'text-gray-400'}`}>
+                  {activeMashupName}
+                </span>
+              </button>
+            )}
           </div>
         </div>
         {/* Down-pointing arrow toward pill */}
