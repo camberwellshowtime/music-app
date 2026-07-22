@@ -101,12 +101,15 @@ async function serveRange(response, rangeHeader) {
 async function handleApp(request) {
   try {
     const response = await fetch(request)
-    if (response.ok) {
+    if (response.ok && request.method === 'GET') {
       const cache = await caches.open(APP_CACHE)
       await cache.put(request, response.clone())
     }
     return response
   } catch {
+    if (request.method !== 'GET') {
+      return new Response('Offline', { status: 503 })
+    }
     const cache  = await caches.open(APP_CACHE)
     const cached = await cache.match(request)
     if (cached) return cached

@@ -6,11 +6,21 @@ const DB_REMOTE_URL = 'https://cst-casting-db.camberwellshowtime.com/db/'
 export const db = new PouchDB(DB_NAME)
 
 let syncHandler = null
+let syncStatusCb = null
+
+export function onSyncStatus(cb) {
+  syncStatusCb = cb
+}
 
 export function startSync() {
   if (syncHandler) return
   const url = `${DB_REMOTE_URL}${DB_NAME}`
+  syncStatusCb?.('syncing')
   syncHandler = db.sync(url, { live: true, retry: true })
+    .on('active',  ()    => syncStatusCb?.('syncing'))
+    .on('paused',  (err) => syncStatusCb?.(err ? 'error' : 'connected'))
+    .on('error',   ()    => syncStatusCb?.('error'))
+    .on('denied',  ()    => syncStatusCb?.('error'))
 }
 
 export function stopSync() {
